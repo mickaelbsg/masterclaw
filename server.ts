@@ -87,6 +87,10 @@ interface MemoryEntry {
   type: "bug" | "decision" | "solution";
   tags: string[];
   embedding?: number[];
+  score: number;
+  hits: number;
+  fails: number;
+  createdAt: number;
 }
 
 let MEMORY: MemoryEntry[] = [];
@@ -110,23 +114,42 @@ async function checkMemory(text: string) {
   if (!embedding) return null;
 
   let bestMatch = null;
-  let highestScore = 0;
+  let highestFinalScore = 0;
+  const now = Date.now();
 
   for (const item of MEMORY) {
     if (!item.embedding) continue;
-    const score = similarity(embedding, item.embedding);
-    if (score > 0.85 && score > highestScore) {
-      highestScore = score;
+    
+    // 1. Similaridade de Cosseno (0 a 1)
+    const similarityScore = similarity(embedding, item.embedding);
+    
+    // 2. Confiança baseada em Hits/Fails (Normalizado de -1 a 1, depois para 0 a 1)
+    const confidence = item.hits - item.fails;
+    const confidenceScore = Math.tanh(confidence / 5); // Suaviza a curva de confiança
+    const normalizedConfidence = (confidenceScore + 1) / 2;
+
+    // 3. Recência (Mais novo = maior score)
+    const ageInDays = (now - (item.createdAt || now)) / (1000 * 60 * 60 * 24);
+    const recencyScore = Math.exp(-ageInDays / 30); // Decaimento exponencial em 30 dias
+
+    // CÁLCULO FINAL: 70% Similaridade, 20% Confiança, 10% Recência
+    const finalScore = (similarityScore * 0.7) + (normalizedConfidence * 0.2) + (recencyScore * 0.1);
+
+    // Threshold de segurança: similaridade mínima de 0.82 e score global positivo
+    if (similarityScore > 0.82 && finalScore > highestFinalScore && (item.score || 0) >= -2) {
+      highestFinalScore = finalScore;
       bestMatch = item;
     }
   }
 
   if (bestMatch) {
-    console.log(`🧠 MEMORY HIT (score: ${highestScore.toFixed(4)}) para: "${text}"`);
+    console.log(`🧠 MEMORY HIT (Final Score: ${highestFinalScore.toFixed(4)}) para: "${text}"`);
     return {
+      id: bestMatch.id,
       text: `[MEMÓRIA: ${bestMatch.type.toUpperCase()}]\n${bestMatch.solution}`,
       type: bestMatch.type,
-      score: highestScore
+      score: highestFinalScore,
+      confidence: bestMatch.hits - bestMatch.fails
     };
   }
   return null;
@@ -403,11 +426,35 @@ app.post("/api/memory", async (req, res) => {
     solution,
     type,
     tags: tags || [],
-    embedding
+    embedding,
+    score: 1,
+    hits: 0,
+    fails: 0,
+    createdAt: Date.now()
   };
   MEMORY.push(newEntry);
   await saveMemoryFile();
   res.json(newEntry);
+});
+
+// --- FEEDBACK ENDPOINT ---
+app.post("/api/memory/:id/feedback", async (req, res) => {
+  const { id } = req.params;
+  const { helpful } = req.body; // boolean
+  
+  const index = MEMORY.findIndex(m => m.id === id);
+  if (index === -1) return res.status(404).json({ error: "Memória não encontrada" });
+
+  if (helpful) {
+    MEMORY[index].score += 2;
+    MEMORY[index].hits += 1;
+  } else {
+    MEMORY[index].score -= 1;
+    MEMORY[index].fails += 1;
+  }
+
+  await saveMemoryFile();
+  res.json({ success: true, newScore: MEMORY[index].score });
 });
 
 app.delete("/api/memory/:id", async (req, res) => {
@@ -435,6 +482,11 @@ app.post("/api/memory/upload", async (req, res) => {
       if (!item.embedding) {
         item.embedding = await getEmbedding(item.input);
       }
+      // Garante campos de ranking
+      if (item.score === undefined) item.score = 1;
+      if (item.hits === undefined) item.hits = 0;
+      if (item.fails === undefined) item.fails = 0;
+      if (item.createdAt === undefined) item.createdAt = Date.now();
     }
     
     MEMORY = data;
@@ -515,6 +567,43 @@ app.delete("/api/config/:id", (req, res) => {
   const { id } = req.params;
   APIS = APIS.filter(api => api.id !== id);
   res.json({ success: true });
+});
+
+// --- DEPENDENCY MANAGER ---
+const DEPENDENCIES = [
+  { id: "node", name: "Node.js (>= 18)", check: "node -v", install: { ubuntu: "sudo apt install nodejs", macos: "brew install node", windows: "winget install OpenJS.NodeJS" } },
+  { id: "git", name: "Git", check: "git --version", install: { ubuntu: "sudo apt install git", macos: "brew install git", windows: "winget install Git.Git" } },
+  { id: "claude", name: "Claude Code CLI", check: "claude --version", install: { all: "npm install -g @anthropic-ai/claude-code" } },
+  { id: "docker", name: "Docker", check: "docker --version", install: { ubuntu: "sudo apt install docker.io", macos: "brew install --cask docker", windows: "winget install Docker.DockerDesktop" } },
+  { id: "tsc", name: "TypeScript Compiler", check: "tsc -v", install: { all: "npm install -g typescript" } }
+];
+
+app.get("/api/deps", async (req, res) => {
+  const results = await Promise.all(DEPENDENCIES.map(async (dep) => {
+    try {
+      const { stdout } = await execPromise(dep.check);
+      return { ...dep, installed: true, version: stdout.trim() };
+    } catch (err) {
+      return { ...dep, installed: false, version: null };
+    }
+  }));
+  res.json(results);
+});
+
+app.post("/api/deps/install", async (req, res) => {
+  const { id, os } = req.body;
+  const dep = DEPENDENCIES.find(d => d.id === id);
+  if (!dep) return res.status(404).json({ error: "Dependência não encontrada" });
+
+  const installCmd = (dep.install as any)[os] || (dep.install as any).all;
+  if (!installCmd) return res.status(400).json({ error: `Instalação não disponível para ${os}` });
+
+  try {
+    const { stdout, stderr } = await execPromise(installCmd);
+    res.json({ success: true, stdout, stderr });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- FILE SYSTEM API ---
@@ -768,7 +857,11 @@ Sempre use a nossa configuração de APIs roteadas.`;
             solution,
             type: ["bug", "decision", "solution"].includes(type) ? type : "solution",
             tags,
-            embedding
+            embedding,
+            score: 1,
+            hits: 0,
+            fails: 0,
+            createdAt: Date.now()
           };
           MEMORY.push(newEntry);
           await saveMemoryFile();
@@ -820,7 +913,11 @@ Sempre use a nossa configuração de APIs roteadas.`;
         solution,
         type: ["bug", "decision", "solution"].includes(type) ? type : "solution",
         tags,
-        embedding
+        embedding,
+        score: 1,
+        hits: 0,
+        fails: 0,
+        createdAt: Date.now()
       };
       MEMORY.push(newEntry);
       await saveMemoryFile();

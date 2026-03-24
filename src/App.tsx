@@ -27,7 +27,17 @@ import {
   Database,
   Tag,
   Upload,
-  Download
+  Download,
+  ThumbsUp,
+  ThumbsDown,
+  Terminal,
+  ShieldCheck,
+  HardDrive,
+  Check,
+  X,
+  Sun,
+  Moon,
+  Languages
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -86,6 +96,20 @@ interface MemoryEntry {
   solution: string;
   type: "bug" | "decision" | "solution";
   tags: string[];
+  score?: number;
+  hits?: number;
+  fails?: number;
+  createdAt?: number;
+}
+
+interface Dependency {
+  id: string;
+  name: string;
+  check: string;
+  installed: boolean;
+  version: string | null;
+  install: { ubuntu?: string; macos?: string; windows?: string; all?: string };
+  installing?: boolean;
 }
 
 interface SortableItemProps {
@@ -252,10 +276,244 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
   );
 }
 
+const translations = {
+  pt: {
+    appName: "MasterClaw",
+    config: "Configurações",
+    terminal: "Claude Terminal",
+    memory: "Memória Técnica",
+    analytics: "Analytics",
+    deps: "Dependências",
+    saveAll: "Salvar Tudo",
+    addApi: "Adicionar API",
+    totalRequests: "Requisições Totais",
+    avgLatency: "Latência Média",
+    totalCost: "Custo Acumulado",
+    lightMode: "Modo Claro",
+    darkMode: "Modo Escuro",
+    language: "Idioma",
+    stats: "Estatísticas",
+    efficiency: "Taxa de Eficiência",
+    tokens: "Tokens Processados",
+    intent: "Distribuição de Intenção",
+    latencyHistory: "Histórico de Latência (ms)",
+    routerStats: "Status do Roteador",
+    testRouter: "Testar Roteador",
+    testMessage: "Mensagem de Teste",
+    placeholderTest: "Olá, quem é você?",
+    runTest: "Executar Teste",
+    systemRequirements: "Requisitos do Sistema",
+    systemDescription: "Garanta que seu ambiente está pronto para o MasterClaw e Claude Code.",
+    install: "Instalar",
+    recheck: "Verificar novamente",
+    detected: "Versão detectada",
+    notDetected: "Não encontrado no sistema",
+    resilienceTip: "Dica de Resiliência: Use Docker 🐳",
+    dockerDescription: "Para evitar conflitos de dependências e garantir que o MasterClaw funcione exatamente igual em qualquer máquina, recomendamos rodar a aplicação via Docker.",
+    addMemory: "Adicionar Memória",
+    input: "Input (Comando/Erro)",
+    solution: "Solução/Decisão",
+    type: "Tipo",
+    tags: "Tags (separadas por vírgula)",
+    cancel: "Cancelar",
+    save: "Salvar",
+    bug: "Bug",
+    decision: "Decisão",
+    solutionType: "Solução",
+    searchMemory: "Buscar na memória técnica...",
+    hits: "Hits",
+    fails: "Fails",
+    score: "Score",
+    noMemory: "Nenhuma memória encontrada.",
+    apiSettings: "Configurações de API (Arraste para ordenar o Fallback)",
+    endpointUrl: "Endpoint URL",
+    apiKey: "Chave da API",
+    model: "Modelo",
+    maxChars: "Limite de Caracteres",
+    temperature: "Temperatura",
+    enabled: "Ativo",
+    testing: "Testando...",
+    test: "Testar",
+    delete: "Excluir",
+    addApiTitle: "Adicionar Nova API",
+    apiName: "Nome da API",
+    apiType: "Tipo de API",
+    placeholderName: "Ex: NVIDIA Mistral",
+    placeholderModel: "Ex: mistralai/mistral-small",
+    placeholderKey: "Sua chave de API",
+    placeholderUrl: "https://...",
+    add: "Adicionar"
+  },
+  en: {
+    appName: "MasterClaw",
+    config: "Settings",
+    terminal: "Claude Terminal",
+    memory: "Technical Memory",
+    analytics: "Analytics",
+    deps: "Dependencies",
+    saveAll: "Save All",
+    addApi: "Add API",
+    totalRequests: "Total Requests",
+    avgLatency: "Avg Latency",
+    totalCost: "Total Cost",
+    lightMode: "Light Mode",
+    darkMode: "Dark Mode",
+    language: "Language",
+    stats: "Statistics",
+    efficiency: "Efficiency Rate",
+    tokens: "Tokens Processed",
+    intent: "Intent Distribution",
+    latencyHistory: "Latency History (ms)",
+    routerStats: "Router Status",
+    testRouter: "Test Router",
+    testMessage: "Test Message",
+    placeholderTest: "Hello, who are you?",
+    runTest: "Run Test",
+    systemRequirements: "System Requirements",
+    systemDescription: "Ensure your environment is ready for MasterClaw and Claude Code.",
+    install: "Install",
+    recheck: "Recheck",
+    detected: "Detected version",
+    notDetected: "Not found in system",
+    resilienceTip: "Resilience Tip: Use Docker 🐳",
+    dockerDescription: "To avoid dependency conflicts and ensure MasterClaw works exactly the same on any machine, we recommend running the application via Docker.",
+    addMemory: "Add Memory",
+    input: "Input (Command/Error)",
+    solution: "Solution/Decision",
+    type: "Type",
+    tags: "Tags (comma separated)",
+    cancel: "Cancel",
+    save: "Save",
+    bug: "Bug",
+    decision: "Decision",
+    solutionType: "Solution",
+    searchMemory: "Search technical memory...",
+    hits: "Hits",
+    fails: "Fails",
+    score: "Score",
+    noMemory: "No memory found.",
+    apiSettings: "API Settings (Drag to reorder Fallback)",
+    endpointUrl: "Endpoint URL",
+    apiKey: "API Key",
+    model: "Model",
+    maxChars: "Character Limit",
+    temperature: "Temperature",
+    enabled: "Enabled",
+    testing: "Testing...",
+    test: "Test",
+    delete: "Delete",
+    addApiTitle: "Add New API",
+    apiName: "API Name",
+    apiType: "API Type",
+    placeholderName: "Ex: NVIDIA Mistral",
+    placeholderModel: "Ex: mistralai/mistral-small",
+    placeholderKey: "Your API key",
+    placeholderUrl: "https://...",
+    add: "Add"
+  },
+  es: {
+    appName: "MasterClaw",
+    config: "Configuraciones",
+    terminal: "Claude Terminal",
+    memory: "Memoria Técnica",
+    analytics: "Analytics",
+    deps: "Dependencias",
+    saveAll: "Guardar Todo",
+    addApi: "Agregar API",
+    totalRequests: "Solicitudes Totales",
+    avgLatency: "Latencia Media",
+    totalCost: "Costo Acumulado",
+    lightMode: "Modo Claro",
+    darkMode: "Modo Oscuro",
+    language: "Idioma",
+    stats: "Estadísticas",
+    efficiency: "Tasa de Eficiencia",
+    tokens: "Tokens Procesados",
+    intent: "Distribución de Intención",
+    latencyHistory: "Historial de Latencia (ms)",
+    routerStats: "Estado del Router",
+    testRouter: "Probar Router",
+    testMessage: "Mensaje de Prueba",
+    placeholderTest: "Hola, ¿quién eres?",
+    runTest: "Ejecutar Prueba",
+    systemRequirements: "Requisitos del Sistema",
+    systemDescription: "Asegúrese de que su entorno esté listo para MasterClaw y Claude Code.",
+    install: "Instalar",
+    recheck: "Verificar de nuevo",
+    detected: "Versión detectada",
+    notDetected: "No encontrado en el sistema",
+    resilienceTip: "Consejo de Resiliencia: Use Docker 🐳",
+    dockerDescription: "Para evitar conflictos de dependencias y garantizar que MasterClaw funcione exactamente igual en cualquier máquina, recomendamos ejecutar la aplicación a través de Docker.",
+    addMemory: "Agregar Memoria",
+    input: "Entrada (Comando/Error)",
+    solution: "Solución/Decisión",
+    type: "Tipo",
+    tags: "Etiquetas (separadas por comas)",
+    cancel: "Cancelar",
+    save: "Guardar",
+    bug: "Bug",
+    decision: "Decisión",
+    solutionType: "Solución",
+    searchMemory: "Buscar en la memoria técnica...",
+    hits: "Hits",
+    fails: "Fails",
+    score: "Score",
+    noMemory: "No se encontró memoria.",
+    apiSettings: "Configuraciones de API (Arrastre para ordenar el Fallback)",
+    endpointUrl: "URL del Endpoint",
+    apiKey: "Clave de API",
+    model: "Modelo",
+    maxChars: "Límite de Caracteres",
+    temperature: "Temperatura",
+    enabled: "Habilitado",
+    testing: "Probando...",
+    test: "Probar",
+    delete: "Eliminar",
+    addApiTitle: "Agregar Nueva API",
+    apiName: "Nombre de la API",
+    apiType: "Tipo de API",
+    placeholderName: "Ej: NVIDIA Mistral",
+    placeholderModel: "Ej: mistralai/mistral-small",
+    placeholderKey: "Tu clave de API",
+    placeholderUrl: "https://...",
+    add: "Agregar"
+  }
+};
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"config" | "terminal" | "memory" | "analytics">("terminal");
+  const [activeTab, setActiveTab] = useState<"config" | "terminal" | "memory" | "analytics" | "deps">("terminal");
   const [apis, setApis] = useState<APIConfig[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
+  const [deps, setDeps] = useState<Dependency[]>([]);
+  const [selectedOS, setSelectedOS] = useState<"ubuntu" | "macos" | "windows">("ubuntu");
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('theme') as 'dark' | 'light') || 'dark';
+    }
+    return 'dark';
+  });
+  const [lang, setLang] = useState<'pt' | 'en' | 'es'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('lang') as 'pt' | 'en' | 'es') || 'pt';
+    }
+    return 'pt';
+  });
+
+  const t = translations[lang];
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('lang', lang);
+  }, [lang]);
   const [loading, setLoading] = useState(true);
   const [testMessage, setTestMessage] = useState("");
   const [testResult, setTestResult] = useState<any>(null);
@@ -297,7 +555,14 @@ export default function App() {
 
   // Terminal State
   const [workingDir, setWorkingDir] = useState(".");
-  const [terminalHistory, setTerminalHistory] = useState<{role: string, content: string, model?: string, latency?: number}[]>([]);
+  const [terminalHistory, setTerminalHistory] = useState<{
+    role: string, 
+    content: string, 
+    model?: string, 
+    latency?: number,
+    memoryId?: string,
+    feedbackGiven?: boolean
+  }[]>([]);
   const [terminalInput, setTerminalInput] = useState("");
   const [isAgentThinking, setIsAgentThinking] = useState(false);
   const [stats, setStats] = useState<any>({
@@ -342,10 +607,20 @@ export default function App() {
     }
   };
 
+  const fetchDeps = async () => {
+    try {
+      const res = await axios.get("/api/deps");
+      setDeps(res.data);
+    } catch (err) {
+      console.error("Failed to fetch deps", err);
+    }
+  };
+
   useEffect(() => {
     fetchConfig();
     fetchStats();
     fetchMemory();
+    fetchDeps();
     const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -497,6 +772,32 @@ export default function App() {
     }
   };
 
+  const installDep = async (id: string) => {
+    setDeps(prev => prev.map(d => d.id === id ? { ...d, installing: true } : d));
+    try {
+      await axios.post("/api/deps/install", { id, os: selectedOS });
+      await fetchDeps();
+    } catch (err) {
+      console.error("Failed to install dep", err);
+    } finally {
+      setDeps(prev => prev.map(d => d.id === id ? { ...d, installing: false } : d));
+    }
+  };
+
+  const handleMemoryFeedback = async (messageIndex: number, memoryId: string, helpful: boolean) => {
+    try {
+      await axios.post(`/api/memory/${memoryId}/feedback`, { helpful });
+      setTerminalHistory(prev => {
+        const newHistory = [...prev];
+        newHistory[messageIndex].feedbackGiven = true;
+        return newHistory;
+      });
+      fetchMemory();
+    } catch (err) {
+      console.error("Failed to send feedback", err);
+    }
+  };
+
   const sendTerminalMessage = async () => {
     if (!terminalInput) return;
     const input = terminalInput;
@@ -558,7 +859,11 @@ export default function App() {
                 });
               }
               if (data.type === "system") {
-                setTerminalHistory(prev => [...prev, { role: "system", content: data.message }]);
+                setTerminalHistory(prev => [...prev, { 
+                  role: "system", 
+                  content: data.message,
+                  memoryId: data.memoryId 
+                }]);
               }
             } catch (e) {}
           }
@@ -595,14 +900,14 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-200 font-sans p-4 md:p-8">
+    <div className="min-h-screen transition-colors duration-300 bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-200 font-sans p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
         {/* Dashboard Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 flex items-center gap-4"
+            className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 flex items-center gap-4 shadow-sm"
           >
             <div className="w-12 h-12 rounded-2xl bg-purple-500/10 flex items-center justify-center text-purple-400">
               <TrendingUp size={24} />
@@ -619,7 +924,7 @@ export default function App() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 flex items-center gap-4"
+            className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 flex items-center gap-4 shadow-sm"
           >
             <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-400">
               <Brain size={24} />
@@ -636,13 +941,13 @@ export default function App() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 flex items-center gap-4"
+            className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 flex items-center gap-4 shadow-sm"
           >
             <div className="w-12 h-12 rounded-2xl bg-orange-500/10 flex items-center justify-center text-orange-400">
               <Clock size={24} />
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-widest font-bold text-neutral-500">Latência Média</p>
+              <p className="text-[10px] uppercase tracking-widest font-bold text-neutral-500">{t.avgLatency}</p>
               <p className="text-2xl font-bold text-orange-400 font-mono">
                 {Math.round(stats.avgLatency)}ms
               </p>
@@ -653,13 +958,13 @@ export default function App() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
-            className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 flex items-center gap-4"
+            className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl p-6 flex items-center gap-4 shadow-sm"
           >
             <div className="w-12 h-12 rounded-2xl bg-green-500/10 flex items-center justify-center text-green-400">
               <DollarSign size={24} />
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-widest font-bold text-neutral-500">Custo Acumulado</p>
+              <p className="text-[10px] uppercase tracking-widest font-bold text-neutral-500">{t.totalCost}</p>
               <p className="text-2xl font-bold text-green-400 font-mono">
                 ${stats.totalCost.toFixed(4)}
               </p>
@@ -668,58 +973,89 @@ export default function App() {
         </div>
 
         {/* Header */}
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-neutral-800 pb-8">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 pb-8">
           <div>
-            <h1 className="text-4xl font-bold tracking-tight text-white flex items-center gap-3">
+            <h1 className="text-4xl font-bold tracking-tight text-neutral-900 dark:text-white flex items-center gap-3">
               <Cpu className="text-orange-500" />
-              AI Router Proxy
+              {t.appName}
             </h1>
-            <div className="flex gap-4 mt-4">
+            <div className="flex flex-wrap gap-4 mt-4">
               <button 
                 onClick={() => setActiveTab("config")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'config' ? 'border-orange-500 text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'config' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
-                Configurações
+                {t.config}
               </button>
               <button 
                 onClick={() => setActiveTab("terminal")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'terminal' ? 'border-orange-500 text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'terminal' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
-                Claude Terminal
+                {t.terminal}
               </button>
               <button 
                 onClick={() => setActiveTab("memory")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'memory' ? 'border-orange-500 text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'memory' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
-                Memória Técnica
+                {t.memory}
               </button>
               <button 
                 onClick={() => setActiveTab("analytics")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'analytics' ? 'border-orange-500 text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'analytics' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
-                Analytics
+                {t.analytics}
+              </button>
+              <button 
+                onClick={() => setActiveTab("deps")}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'deps' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
+              >
+                {t.deps}
               </button>
             </div>
           </div>
           
-          {activeTab === 'config' && (
-            <div className="flex gap-3">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 p-1 rounded-xl shadow-sm">
               <button 
-                onClick={saveAll}
-                className="bg-neutral-800 hover:bg-neutral-700 text-white px-6 py-2.5 rounded-full font-semibold flex items-center gap-2 transition-all active:scale-95"
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                className="p-2 rounded-lg text-neutral-500 hover:text-orange-500 transition-all"
+                title={theme === 'dark' ? t.lightMode : t.darkMode}
               >
-                <Save size={20} />
-                Salvar Tudo
+                {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
               </button>
-              <button 
-                onClick={() => setShowAddModal(true)}
-                className="bg-orange-600 hover:bg-orange-500 text-white px-6 py-2.5 rounded-full font-semibold flex items-center gap-2 transition-all active:scale-95"
-              >
-                <Plus size={20} />
-                Adicionar API
-              </button>
+              <div className="w-px h-4 bg-neutral-200 dark:bg-neutral-800 mx-1" />
+              <div className="flex items-center gap-1 px-2">
+                <Languages size={16} className="text-neutral-500" />
+                <select 
+                  value={lang}
+                  onChange={(e) => setLang(e.target.value as any)}
+                  className="bg-transparent text-xs font-bold uppercase tracking-widest text-neutral-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="pt">PT</option>
+                  <option value="en">EN</option>
+                  <option value="es">ES</option>
+                </select>
+              </div>
             </div>
-          )}
+
+            {activeTab === 'config' && (
+              <div className="flex gap-3">
+                <button 
+                  onClick={saveAll}
+                  className="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-900 dark:text-white px-6 py-2.5 rounded-full font-semibold flex items-center gap-2 transition-all active:scale-95 border border-neutral-200 dark:border-neutral-700"
+                >
+                  <Save size={20} />
+                  {t.saveAll}
+                </button>
+                <button 
+                  onClick={() => setShowAddModal(true)}
+                  className="bg-orange-600 hover:bg-orange-500 text-white px-6 py-2.5 rounded-full font-semibold flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-orange-600/20"
+                >
+                  <Plus size={20} />
+                  {t.addApi}
+                </button>
+              </div>
+            )}
+          </div>
         </header>
 
         {activeTab === 'config' && (
@@ -935,6 +1271,20 @@ export default function App() {
                           </span>
                           <h3 className="text-white font-bold">{item.input}</h3>
                         </div>
+                        <div className="flex items-center gap-4 text-[10px] font-mono text-neutral-500">
+                          <span className="flex items-center gap-1">
+                            <TrendingUp size={10} className="text-green-500" /> Score: {item.score || 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <ThumbsUp size={10} /> Hits: {item.hits || 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <ThumbsDown size={10} /> Fails: {item.fails || 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Clock size={10} /> {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'Antiga'}
+                          </span>
+                        </div>
                         <pre className="text-neutral-400 text-sm font-mono bg-black/30 p-4 rounded-xl whitespace-pre-wrap">
                           {item.solution}
                         </pre>
@@ -1003,7 +1353,34 @@ export default function App() {
                       <span className="shrink-0 text-orange-500">
                         {msg.role === 'user' ? '>' : msg.role === 'system' ? '!' : 'claude:'}
                       </span>
-                      <pre className="whitespace-pre-wrap font-mono">{msg.content}</pre>
+                      <div className="flex-1">
+                        <pre className="whitespace-pre-wrap font-mono">{msg.content}</pre>
+                        
+                        {msg.role === 'system' && msg.memoryId && !msg.feedbackGiven && (
+                          <div className="mt-2 flex items-center gap-3 no-italic">
+                            <span className="text-[10px] text-neutral-500 uppercase font-bold">Esta memória ajudou?</span>
+                            <button 
+                              onClick={() => handleMemoryFeedback(i, msg.memoryId!, true)}
+                              className="p-1.5 rounded-lg bg-green-500/10 text-green-500 hover:bg-green-500/20 transition-all"
+                              title="Sim, ajudou!"
+                            >
+                              <ThumbsUp size={12} />
+                            </button>
+                            <button 
+                              onClick={() => handleMemoryFeedback(i, msg.memoryId!, false)}
+                              className="p-1.5 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-all"
+                              title="Não, foi inútil."
+                            >
+                              <ThumbsDown size={12} />
+                            </button>
+                          </div>
+                        )}
+                        {msg.role === 'system' && msg.memoryId && msg.feedbackGiven && (
+                          <div className="mt-2 text-[10px] text-green-500/50 font-bold uppercase no-italic">
+                            Feedback enviado! O sistema está aprendendo...
+                          </div>
+                        )}
+                      </div>
                     </div>
                     {msg.model && (
                       <div className="ml-8 flex items-center gap-3 text-[10px] uppercase tracking-tighter font-bold opacity-40">
@@ -1181,6 +1558,96 @@ export default function App() {
                   <p className="text-3xl font-black text-white">{stats.totalTokens.toLocaleString()}</p>
                   <p className="text-[10px] text-neutral-500 uppercase font-bold tracking-widest mt-1">Tokens Processados</p>
                 </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Dependencies Tab */}
+        {activeTab === 'deps' && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-8"
+          >
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-3xl font-black text-white tracking-tighter">DEPENDÊNCIAS</h2>
+                <p className="text-neutral-500 text-sm font-medium">Gerencie os requisitos do sistema MasterClaw</p>
+              </div>
+              <div className="flex items-center gap-3 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
+                {(['ubuntu', 'macos', 'windows'] as const).map((os) => (
+                  <button
+                    key={os}
+                    onClick={() => setSelectedOS(os)}
+                    className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all ${
+                      selectedOS === os 
+                        ? 'bg-white text-black shadow-lg' 
+                        : 'text-neutral-500 hover:text-white'
+                    }`}
+                  >
+                    {os}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {deps.map((dep) => (
+                <div key={dep.id} className="bg-neutral-900/50 p-6 rounded-2xl border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-6 hover:border-neutral-700 transition-colors">
+                  <div className="flex items-center gap-5">
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center border ${
+                      dep.installed 
+                        ? 'bg-green-500/10 border-green-500/20 text-green-400' 
+                        : 'bg-red-500/10 border-red-500/20 text-red-400'
+                    }`}>
+                      {dep.installed ? <Check size={28} /> : <X size={28} />}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-3">
+                        <h3 className="text-xl font-bold text-white">{dep.name}</h3>
+                        {dep.installed && (
+                          <span className="px-2 py-0.5 bg-neutral-800 text-neutral-400 text-[10px] font-bold rounded uppercase tracking-widest">
+                            {dep.version || 'v?'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-neutral-500 text-sm mt-1">{dep.description}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={fetchDeps}
+                      className="p-3 bg-neutral-800 text-neutral-400 hover:text-white rounded-xl transition-colors border border-neutral-700"
+                      title="Verificar novamente"
+                    >
+                      <RefreshCw size={20} />
+                    </button>
+                    {!dep.installed && (
+                      <button 
+                        onClick={() => installDep(dep.id)}
+                        className="px-6 py-3 bg-white text-black font-bold rounded-xl hover:bg-neutral-200 transition-colors flex items-center gap-2"
+                      >
+                        <Download size={18} />
+                        INSTALAR
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-8 bg-blue-500/10 border border-blue-500/20 rounded-3xl flex items-start gap-6">
+              <div className="w-12 h-12 bg-blue-500 text-white rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-blue-500/20">
+                <Zap size={24} />
+              </div>
+              <div>
+                <h4 className="text-xl font-bold text-white mb-2">Dica de Resiliência: Use Docker 🐳</h4>
+                <p className="text-blue-100/70 text-sm leading-relaxed">
+                  Para evitar conflitos de dependências e garantir que o MasterClaw funcione exatamente igual em qualquer máquina, 
+                  recomendamos rodar a aplicação via Docker. Isso empacota tudo o que você precisa em um ambiente isolado e seguro.
+                </p>
               </div>
             </div>
           </motion.div>
