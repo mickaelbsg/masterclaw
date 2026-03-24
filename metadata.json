@@ -1,0 +1,5 @@
+{
+  "name": "MasterClaw",
+  "description": "A pluggable AI API router that fallbacks between different providers (NVIDIA, Groq, Gemini, Ollama) with a Claude-compatible endpoint.",
+  "requestFramePermissions": []
+}
