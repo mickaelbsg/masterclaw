@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+# Dados persistidos (podem conter chaves de API)
+config.json
+memory.json

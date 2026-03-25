@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import { 
   Plus, 
@@ -88,6 +88,9 @@ interface APIConfig {
   status?: 'online' | 'offline' | 'unknown';
   lastLatency?: number;
   testing?: boolean;
+  lastError?: string;
+  availableModels?: string[];
+  loadingModels?: boolean;
 }
 
 interface MemoryEntry {
@@ -119,9 +122,10 @@ interface SortableItemProps {
   handleDelete: (id: string) => Promise<void> | void;
   handleUpdate: (id: string, updates: Partial<APIConfig>) => Promise<void> | void;
   testSingleApi: (id: string) => Promise<void> | void;
+  fetchModelsForApi: (id: string, options?: { silent?: boolean; autoSelect?: boolean }) => Promise<void> | void;
 }
 
-function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingleApi }: SortableItemProps) {
+function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingleApi, fetchModelsForApi }: SortableItemProps) {
   const {
     attributes,
     listeners,
@@ -144,7 +148,7 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
       layout
       className={`p-5 rounded-2xl border transition-all ${
         isDragging ? "opacity-50 scale-105 shadow-2xl border-orange-500/50" : 
-        api.enabled ? "bg-neutral-900 border-neutral-800" : "bg-neutral-900/50 border-neutral-900 opacity-60"
+        api.enabled ? "bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800" : "bg-neutral-100 dark:bg-neutral-900/50 border-neutral-200 dark:border-neutral-900 opacity-70"
       }`}
     >
       <div className="flex items-start justify-between">
@@ -164,14 +168,14 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
             {api.type === 'gemini' ? <Globe size={24} /> : <Cpu size={24} />}
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white capitalize flex items-center gap-2">
+            <h3 className="text-lg font-bold text-neutral-900 dark:text-white capitalize flex items-center gap-2">
               {api.name}
               {api.status && (
                 <span className={`w-2 h-2 rounded-full ${api.status === 'online' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`} />
               )}
             </h3>
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-[10px] bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded uppercase font-bold tracking-widest">
+              <span className="text-[10px] bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 px-2 py-0.5 rounded uppercase font-bold tracking-widest">
                 {api.type}
               </span>
               <span className="text-sm text-neutral-500 font-mono">{api.model}</span>
@@ -185,9 +189,17 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
         </div>
         <div className="flex items-center gap-2">
           <button 
+            onClick={() => fetchModelsForApi(api.id)}
+            disabled={api.loadingModels}
+            className={`p-2 rounded-lg transition-colors ${api.loadingModels ? 'text-blue-400 animate-pulse' : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-neutral-800'}`}
+            title="Carregar modelos disponíveis"
+          >
+            <BookOpen size={18} className={api.loadingModels ? 'animate-pulse' : ''} />
+          </button>
+          <button 
             onClick={() => testSingleApi(api.id)}
             disabled={api.testing}
-            className={`p-2 rounded-lg transition-colors ${api.testing ? 'text-orange-500 animate-pulse' : 'text-neutral-500 hover:text-white hover:bg-neutral-800'}`}
+            className={`p-2 rounded-lg transition-colors ${api.testing ? 'text-orange-500 animate-pulse' : 'text-neutral-500 hover:text-neutral-900 dark:hover:text-white hover:bg-neutral-200 dark:hover:bg-neutral-800'}`}
             title="Testar API"
           >
             <RefreshCw size={20} className={api.testing ? 'animate-spin' : ''} />
@@ -207,6 +219,12 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
         </div>
       </div>
 
+      {api.lastError && (
+        <div className="mt-4 bg-red-500/10 border border-red-500/20 text-red-300 p-3 rounded-lg text-xs">
+          {api.lastError}
+        </div>
+      )}
+
       <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="space-y-1.5">
           <label className="text-[10px] uppercase tracking-widest font-bold text-neutral-500 flex items-center gap-1">
@@ -217,21 +235,23 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
             value={api.model}
             onChange={(e) => handleUpdate(api.id, { model: e.target.value })}
             placeholder="Ex: llama3-70b"
-            className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500 transition-colors"
+            className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:border-orange-500 transition-colors"
           />
         </div>
-        <div className="space-y-1.5">
-          <label className="text-[10px] uppercase tracking-widest font-bold text-neutral-500 flex items-center gap-1">
-            <Key size={10} /> API Key
-          </label>
-          <input 
-            type="password"
-            value={api.key}
-            onChange={(e) => handleUpdate(api.id, { key: e.target.value })}
-            placeholder="Insira sua chave..."
-            className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500 transition-colors"
-          />
-        </div>
+        {api.type !== 'ollama' && (
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase tracking-widest font-bold text-neutral-500 flex items-center gap-1">
+              <Key size={10} /> API Key
+            </label>
+            <input 
+              type="password"
+              value={api.key}
+              onChange={(e) => handleUpdate(api.id, { key: e.target.value })}
+              placeholder="Insira sua chave..."
+              className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:border-orange-500 transition-colors"
+            />
+          </div>
+        )}
         <div className="space-y-1.5">
           <label className="text-[10px] uppercase tracking-widest font-bold text-neutral-500 flex items-center gap-1">
             Contexto (Chars)
@@ -240,7 +260,7 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
             type="number"
             value={api.max_chars || 4000}
             onChange={(e) => handleUpdate(api.id, { max_chars: parseInt(e.target.value) })}
-            className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500 transition-colors"
+            className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:border-orange-500 transition-colors"
           />
         </div>
         <div className="space-y-1.5">
@@ -254,9 +274,27 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
             max="2"
             value={api.temperature || 0.7}
             onChange={(e) => handleUpdate(api.id, { temperature: parseFloat(e.target.value) })}
-            className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500 transition-colors"
+            className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:border-orange-500 transition-colors"
           />
         </div>
+        {api.availableModels && api.availableModels.length > 0 && (
+          <div className="space-y-1.5 md:col-span-2 lg:col-span-4">
+            <label className="text-[10px] uppercase tracking-widest font-bold text-neutral-500 flex items-center gap-1">
+              <BookOpen size={10} /> Modelos disponíveis
+            </label>
+            <select
+              value={api.model}
+              onChange={(e) => handleUpdate(api.id, { model: e.target.value })}
+              className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:border-orange-500 transition-colors"
+            >
+              {api.availableModels.map((modelName) => (
+                <option key={modelName} value={modelName}>
+                  {modelName}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {(api.type === 'openai' || api.type === 'ollama') && (
           <div className="space-y-1.5 md:col-span-2 lg:col-span-4">
             <label className="text-[10px] uppercase tracking-widest font-bold text-neutral-500 flex items-center gap-1">
@@ -267,8 +305,13 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
               value={api.url}
               onChange={(e) => handleUpdate(api.id, { url: e.target.value })}
               placeholder="https://..."
-              className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-500 transition-colors"
+              className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:border-orange-500 transition-colors"
             />
+            {api.type === 'ollama' && (
+              <p className="text-[11px] text-neutral-500 mt-1">
+                Ollama local não exige API key. Opcionalmente: <code>ollama login</code>. Para usar com Claude: <code>ollama launch claude</code>.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -279,13 +322,13 @@ function SortableItem({ api, handleToggle, handleDelete, handleUpdate, testSingl
 const translations = {
   pt: {
     appName: "MasterClaw",
-    config: "Configurações",
-    terminal: "Claude Terminal",
-    memory: "Memória Técnica",
-    analytics: "Analytics",
-    deps: "Dependências",
-    saveAll: "Salvar Tudo",
-    addApi: "Adicionar API",
+    config: "Ajustes",
+    terminal: "Terminal",
+    memory: "Memória",
+    analytics: "Métricas",
+    deps: "Deps",
+    saveAll: "Salvar",
+    addApi: "Nova API",
     totalRequests: "Requisições Totais",
     avgLatency: "Latência Média",
     totalCost: "Custo Acumulado",
@@ -520,6 +563,7 @@ export default function App() {
   const [testing, setTesting] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAddMemoryModal, setShowAddMemoryModal] = useState(false);
+  const [notice, setNotice] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [newApi, setNewApi] = useState<Partial<APIConfig>>({
     name: "",
     type: "openai",
@@ -534,6 +578,7 @@ export default function App() {
     type: "bug",
     tags: []
   });
+  const autoModelSignatureRef = useRef<Record<string, string>>({});
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -625,6 +670,27 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      for (const api of apis) {
+        if (!api.enabled || api.loadingModels) continue;
+
+        const hasKey = api.type === "ollama" ? true : Boolean(api.key?.trim());
+        const needsUrl = api.type === "openai" || api.type === "ollama";
+        const hasUrl = !needsUrl || Boolean(api.url?.trim());
+        if (!hasKey || !hasUrl) continue;
+
+        const signature = `${api.type}|${api.url || ""}|${api.key || ""}`;
+        if (autoModelSignatureRef.current[api.id] === signature) continue;
+
+        autoModelSignatureRef.current[api.id] = signature;
+        fetchModelsForApi(api.id, { silent: true, autoSelect: true });
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [apis]);
+
   const addMemory = async () => {
     if (!newMemory.input || !newMemory.solution) return;
     try {
@@ -655,13 +721,83 @@ export default function App() {
     }
   };
 
+  const showNotice = (type: "success" | "error" | "info", text: string) => {
+    setNotice({ type, text });
+    setTimeout(() => {
+      setNotice((current) => (current?.text === text ? null : current));
+    }, 5000);
+  };
+
+  const extractApiErrorMessage = (err: any) => {
+    return (
+      err?.response?.data?.detail ||
+      err?.response?.data?.error ||
+      err?.message ||
+      "Erro desconhecido"
+    );
+  };
+
   const testSingleApi = async (id: string) => {
     setApis(prev => prev.map(api => api.id === id ? { ...api, testing: true } : api));
     try {
       const res = await axios.post(`/api/config/test/${id}`);
-      setApis(prev => prev.map(api => api.id === id ? { ...api, testing: false, status: 'online', lastLatency: res.data.latency } : api));
-    } catch (err) {
-      setApis(prev => prev.map(api => api.id === id ? { ...api, testing: false, status: 'offline' } : api));
+      setApis(prev => prev.map(api => api.id === id ? { ...api, testing: false, status: 'online', lastLatency: res.data.latency, lastError: undefined } : api));
+      const apiName = apis.find((api) => api.id === id)?.name || "API";
+      showNotice("success", `${apiName} conectada com sucesso.`);
+    } catch (err: any) {
+      const errorMessage = extractApiErrorMessage(err);
+      const apiName = apis.find((api) => api.id === id)?.name || "API";
+      setApis(prev => prev.map(api => api.id === id ? { ...api, testing: false, status: 'offline', lastError: errorMessage } : api));
+      showNotice("error", `${apiName}: ${errorMessage}`);
+    }
+  };
+
+  const fetchModelsForApi = async (id: string, options?: { silent?: boolean; autoSelect?: boolean }) => {
+    const silent = options?.silent === true;
+    const autoSelect = options?.autoSelect !== false;
+    const currentApi = apis.find((api) => api.id === id);
+
+    setApis(prev => prev.map(api => api.id === id ? { ...api, loadingModels: true } : api));
+    try {
+      const res = await axios.get(`/api/config/models/${id}`);
+      const models: string[] = res.data?.models || [];
+      if (!models.length) throw new Error("Nenhum modelo retornado por esse provider");
+
+      const shouldAutoSelectModel =
+        autoSelect &&
+        !!currentApi &&
+        (!currentApi.model || !models.includes(currentApi.model));
+      const selectedModel = shouldAutoSelectModel ? models[0] : currentApi?.model;
+
+      setApis(prev =>
+        prev.map(api =>
+          api.id === id
+            ? {
+                ...api,
+                loadingModels: false,
+                availableModels: models,
+                lastError: undefined,
+                model: selectedModel || api.model
+              }
+            : api
+        )
+      );
+
+      if (shouldAutoSelectModel && selectedModel) {
+        await axios.put(`/api/config/${id}`, { model: selectedModel });
+      }
+
+      const apiName = apis.find((api) => api.id === id)?.name || "API";
+      if (!silent) {
+        showNotice("info", `${apiName}: ${models.length} modelos disponíveis carregados.`);
+      }
+    } catch (err: any) {
+      const errorMessage = extractApiErrorMessage(err);
+      const apiName = apis.find((api) => api.id === id)?.name || "API";
+      setApis(prev => prev.map(api => api.id === id ? { ...api, loadingModels: false, lastError: errorMessage } : api));
+      if (!silent) {
+        showNotice("error", `Falha ao listar modelos de ${apiName}: ${errorMessage}`);
+      }
     }
   };
 
@@ -807,80 +943,57 @@ export default function App() {
     setIsAgentThinking(true);
 
     try {
-      const response = await fetch("/api/agent/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: input,
-          history: terminalHistory.map(({role, content}) => ({role, content})),
+      const maxSteps = 6;
+      let currentMessage = input;
+      let loopHistory = [...terminalHistory, userMsg].map(({ role, content }) => ({ role, content }));
+
+      for (let step = 0; step < maxSteps; step++) {
+        const res = await axios.post("/api/agent/chat", {
+          message: currentMessage,
+          history: loopHistory,
           workingDir,
-          stream: true
-        })
-      });
+          stream: false
+        });
 
-      if (!response.ok) throw new Error("Falha na requisição");
+        const aiText: string = res.data?.text || "";
+        const aiModel: string = res.data?.model || "router";
+        const aiLatency: number = res.data?.latency || 0;
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let fullText = "";
-      let model = "";
-      let latency = 0;
+        setTerminalHistory(prev => [...prev, {
+          role: "assistant",
+          content: aiText,
+          model: aiModel,
+          latency: aiLatency
+        }]);
 
-      // Adiciona mensagem vazia do assistente para começar o stream
-      setTerminalHistory(prev => [...prev, { role: "assistant", content: "", model: "thinking..." }]);
+        loopHistory.push({ role: "assistant", content: aiText });
 
-      while (true) {
-        const { done, value } = await reader!.read();
-        if (done) break;
+        const isCommand =
+          aiText.startsWith("READ:") ||
+          aiText.startsWith("WRITE:") ||
+          aiText.startsWith("EXEC:");
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        if (!isCommand) break;
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const dataStr = line.slice(6);
-            if (dataStr === "[DONE]") continue;
-            try {
-              const data = JSON.parse(dataStr);
-              if (data.type === "content_block_delta") {
-                fullText += data.delta.text;
-                model = data.model;
-                latency = data.latency;
-                
-                setTerminalHistory(prev => {
-                  const newHistory = [...prev];
-                  const last = newHistory[newHistory.length - 1];
-                  if (last && last.role === 'assistant') {
-                    last.content = fullText;
-                    last.model = model;
-                    last.latency = latency;
-                  }
-                  return newHistory;
-                });
-              }
-              if (data.type === "system") {
-                setTerminalHistory(prev => [...prev, { 
-                  role: "system", 
-                  content: data.message,
-                  memoryId: data.memoryId 
-                }]);
-              }
-            } catch (e) {}
-          }
-        }
-      }
-
-      // Se for um comando, executa
-      if (fullText.startsWith("READ:") || fullText.startsWith("WRITE:") || fullText.startsWith("EXEC:")) {
         const execRes = await axios.post("/api/agent/execute", {
-          command: fullText,
+          command: aiText,
           workingDir
         });
-        setTerminalHistory(prev => [...prev, { 
-          role: "assistant", 
-          content: execRes.data.text, 
-          model: "system" 
+
+        const execText = execRes.data?.text || "Comando executado sem saída.";
+        setTerminalHistory(prev => [...prev, {
+          role: "system",
+          content: execText,
+          model: "system"
         }]);
+
+        const feedbackToAgent =
+          `Resultado do comando:\n${execText}\n` +
+          "Se ainda faltar algo, emita o próximo READ/WRITE/EXEC. " +
+          "Se terminou, responda ao usuário normalmente.";
+
+        loopHistory.push({ role: "system", content: execText });
+        currentMessage = feedbackToAgent;
       }
 
       fetchStats();
@@ -893,7 +1006,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-neutral-950 flex items-center justify-center">
+      <div className="min-h-screen bg-neutral-100 dark:bg-neutral-950 flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-orange-500 animate-spin" />
       </div>
     );
@@ -982,31 +1095,31 @@ export default function App() {
             <div className="flex flex-wrap gap-4 mt-4">
               <button 
                 onClick={() => setActiveTab("config")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'config' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all whitespace-nowrap ${activeTab === 'config' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
                 {t.config}
               </button>
               <button 
                 onClick={() => setActiveTab("terminal")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'terminal' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all whitespace-nowrap ${activeTab === 'terminal' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
                 {t.terminal}
               </button>
               <button 
                 onClick={() => setActiveTab("memory")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'memory' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all whitespace-nowrap ${activeTab === 'memory' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
                 {t.memory}
               </button>
               <button 
                 onClick={() => setActiveTab("analytics")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'analytics' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all whitespace-nowrap ${activeTab === 'analytics' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
                 {t.analytics}
               </button>
               <button 
                 onClick={() => setActiveTab("deps")}
-                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all ${activeTab === 'deps' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
+                className={`text-sm font-bold uppercase tracking-widest pb-2 border-b-2 transition-all whitespace-nowrap ${activeTab === 'deps' ? 'border-orange-500 text-orange-500 dark:text-white' : 'border-transparent text-neutral-500'}`}
               >
                 {t.deps}
               </button>
@@ -1037,35 +1150,61 @@ export default function App() {
               </div>
             </div>
 
-            {activeTab === 'config' && (
-              <div className="flex gap-3">
-                <button 
-                  onClick={saveAll}
-                  className="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-900 dark:text-white px-6 py-2.5 rounded-full font-semibold flex items-center gap-2 transition-all active:scale-95 border border-neutral-200 dark:border-neutral-700"
-                >
-                  <Save size={20} />
-                  {t.saveAll}
-                </button>
-                <button 
-                  onClick={() => setShowAddModal(true)}
-                  className="bg-orange-600 hover:bg-orange-500 text-white px-6 py-2.5 rounded-full font-semibold flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-orange-600/20"
-                >
-                  <Plus size={20} />
-                  {t.addApi}
-                </button>
-              </div>
-            )}
           </div>
         </header>
+
+        <AnimatePresence>
+          {notice && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className={`rounded-2xl border p-4 flex items-start justify-between gap-3 ${
+                notice.type === "error"
+                  ? "bg-red-500/10 border-red-500/20 text-red-300"
+                  : notice.type === "success"
+                    ? "bg-green-500/10 border-green-500/20 text-green-300"
+                    : "bg-blue-500/10 border-blue-500/20 text-blue-300"
+              }`}
+            >
+              <p className="text-sm">{notice.text}</p>
+              <button
+                onClick={() => setNotice(null)}
+                className="text-neutral-400 hover:text-white transition-colors"
+                title="Fechar aviso"
+              >
+                <X size={16} />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {activeTab === 'config' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* API List */}
             <div className="lg:col-span-2 space-y-4">
-              <h2 className="text-xl font-semibold flex items-center gap-2 mb-4">
-                <Settings size={20} className="text-neutral-400" />
-                Configurações de API (Arraste para ordenar o Fallback)
-              </h2>
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  <Settings size={20} className="text-neutral-400" />
+                  Configurações de API (Arraste para ordenar o Fallback)
+                </h2>
+                <div className="inline-flex items-center gap-2 p-1 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-md shadow-sm">
+                  <button
+                    onClick={saveAll}
+                    className="h-10 px-4 rounded-xl text-sm font-semibold whitespace-nowrap flex items-center gap-2 bg-gradient-to-b from-neutral-100 to-neutral-200 dark:from-neutral-800 dark:to-neutral-900 hover:from-neutral-200 hover:to-neutral-300 dark:hover:from-neutral-700 dark:hover:to-neutral-800 border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-neutral-100 transition-all"
+                  >
+                    <Save size={16} />
+                    {t.saveAll}
+                  </button>
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="h-10 px-4 rounded-xl text-sm font-semibold whitespace-nowrap flex items-center gap-2 bg-gradient-to-b from-orange-400 to-orange-600 hover:from-orange-300 hover:to-orange-500 text-white border border-orange-500/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)] transition-all"
+                  >
+                    <Plus size={16} />
+                    {t.addApi}
+                  </button>
+                </div>
+              </div>
               
               <DndContext 
                 sensors={sensors}
@@ -1085,6 +1224,7 @@ export default function App() {
                         handleDelete={handleDelete}
                         handleUpdate={handleUpdate}
                         testSingleApi={testSingleApi}
+                        fetchModelsForApi={fetchModelsForApi}
                       />
                     ))}
                   </div>
@@ -1099,14 +1239,14 @@ export default function App() {
                 Testar Roteador
               </h2>
               
-              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 space-y-4">
+              <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-neutral-400">Mensagem de Teste</label>
                   <textarea 
                     value={testMessage}
                     onChange={(e) => setTestMessage(e.target.value)}
                     placeholder="Olá, quem é você?"
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-4 text-sm min-h-[100px] focus:outline-none focus:border-orange-500 transition-colors resize-none"
+                    className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 text-sm min-h-[100px] text-neutral-900 dark:text-neutral-100 focus:outline-none focus:border-orange-500 transition-colors resize-none"
                   />
                 </div>
                 
@@ -1161,8 +1301,8 @@ export default function App() {
                               </div>
                             </div>
                           </div>
-                          <div className="bg-neutral-950 border border-neutral-800 p-4 rounded-xl">
-                            <p className="text-sm leading-relaxed text-neutral-300">
+                          <div className="bg-neutral-100 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 p-4 rounded-xl">
+                            <p className="text-sm leading-relaxed text-neutral-700 dark:text-neutral-300">
                               {testResult.text}
                             </p>
                           </div>
@@ -1174,10 +1314,10 @@ export default function App() {
               </div>
 
               <div className="bg-orange-500/5 border border-orange-500/10 rounded-2xl p-6">
-                <h3 className="text-sm font-bold text-orange-400 uppercase tracking-widest mb-2">Dica Pro</h3>
-                <p className="text-xs text-neutral-400 leading-relaxed">
+                <h3 className="text-sm font-bold text-orange-500 uppercase tracking-widest mb-2">Dica Pro</h3>
+                <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed">
                   Aponte seu Claude Code ou qualquer cliente compatível com Anthropic para:
-                  <code className="block mt-2 bg-neutral-950 p-2 rounded border border-neutral-800 text-orange-500 break-all">
+                  <code className="block mt-2 bg-white dark:bg-neutral-950 p-2 rounded border border-neutral-200 dark:border-neutral-800 text-orange-500 break-all">
                     {window.location.origin}/v1/messages
                   </code>
                 </p>

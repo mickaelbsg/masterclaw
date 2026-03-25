@@ -3,15 +3,33 @@ import axios from "axios";
 import cors from "cors";
 import path from "path";
 import fs from "fs/promises";
+import fsSync from "fs";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import { exec } from "child_process";
 import util from "util";
 import similarity from "cosine-similarity";
+import dotenv from "dotenv";
+
+// Carrega variáveis de ambiente do arquivo .env
+dotenv.config();
 
 const execPromise = util.promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Diretório de dados persistentes (para Docker)
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
+const OLLAMA_LAUNCH_CMD = process.env.OLLAMA_LAUNCH_CMD || "ollama launch claude";
+const EXEC_SHELL = process.env.EXEC_SHELL || (process.platform === "win32" ? "cmd.exe" : "/bin/sh");
+const STRICT_ROUTER = process.env.STRICT_ROUTER === "true";
+let ollamaLaunchInFlight: Promise<void> | null = null;
+let lastOllamaLaunchAttempt = 0;
+
+async function runCommand(command: string, cwd?: string) {
+  return execPromise(command, cwd ? { cwd, shell: EXEC_SHELL } : { shell: EXEC_SHELL });
+}
 
 const app = express();
 app.use(cors());
@@ -29,6 +47,113 @@ interface APIConfig {
   temperature?: number;
 }
 
+function normalizeApiKey(key?: string) {
+  if (!key) return "";
+  return key.replace(/^Bearer\s+/i, "").trim();
+}
+
+const PERSIST_API_KEYS = process.env.PERSIST_API_KEYS === "true";
+
+function getEnvVarNameForApi(api: Partial<APIConfig>) {
+  const name = (api.name || "").toLowerCase();
+  if (name === "google" || name === "gemini") return "GEMINI_API_KEY";
+  if (name === "nvidia") return "NVIDIA_API_KEY";
+  if (name === "groq") return "GROQ_API_KEY";
+  return null;
+}
+
+function resolveApiKey(api: Partial<APIConfig>, previousKey = "") {
+  const directKey = normalizeApiKey(api.key);
+  const envVarName = getEnvVarNameForApi(api);
+  const envKey = envVarName ? normalizeApiKey(process.env[envVarName] || "") : "";
+  const fallbackKey = normalizeApiKey(previousKey);
+
+  return directKey || envKey || fallbackKey || "";
+}
+
+function normalizeApiConfig(api: any, previous?: APIConfig): APIConfig {
+  return {
+    ...api,
+    enabled: api.enabled !== undefined ? api.enabled : true,
+    key: resolveApiKey(api, previous?.key || "")
+  };
+}
+
+function serializeApiConfig(api: APIConfig): APIConfig {
+  return {
+    ...api,
+    key: PERSIST_API_KEYS ? normalizeApiKey(api.key) : ""
+  };
+}
+
+function getApiErrorDetails(err: any) {
+  const status = err?.response?.status;
+  const data = err?.response?.data;
+
+  if (!data) {
+    return {
+      status: status || null,
+      detail: err?.message || "Erro desconhecido ao chamar API"
+    };
+  }
+
+  const detail =
+    data?.error?.message ||
+    data?.detail ||
+    data?.title ||
+    data?.message ||
+    JSON.stringify(data);
+
+  return { status: status || null, detail };
+}
+
+async function isOllamaReachable() {
+  try {
+    await axios.get(`${OLLAMA_BASE_URL}/api/tags`, { timeout: 1500 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureOllamaReady() {
+  if (await isOllamaReachable()) return;
+
+  if (ollamaLaunchInFlight) {
+    await ollamaLaunchInFlight;
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastOllamaLaunchAttempt < 5000) {
+    // Evita spam de launch em cascata quando várias requests chegam juntas.
+    return;
+  }
+
+  lastOllamaLaunchAttempt = now;
+  ollamaLaunchInFlight = (async () => {
+    try {
+      console.log(`🦙 Ollama indisponível. Tentando iniciar automaticamente: "${OLLAMA_LAUNCH_CMD}"`);
+      const { stdout, stderr } = await runCommand(OLLAMA_LAUNCH_CMD);
+      if (stdout) console.log(`🦙 Ollama launch stdout: ${stdout.trim()}`);
+      if (stderr) console.log(`🦙 Ollama launch stderr: ${stderr.trim()}`);
+    } catch (err: any) {
+      console.log(`❌ Falha ao iniciar Ollama automaticamente: ${err?.message || "erro desconhecido"}`);
+    }
+  })();
+
+  try {
+    await ollamaLaunchInFlight;
+  } finally {
+    ollamaLaunchInFlight = null;
+  }
+
+  const ready = await isOllamaReachable();
+  if (!ready) {
+    throw new Error(`Ollama não está disponível em ${OLLAMA_BASE_URL} após tentativa automática`);
+  }
+}
+
 // --- CONFIG CENTRAL ---
 let APIS: APIConfig[] = [
   {
@@ -36,7 +161,7 @@ let APIS: APIConfig[] = [
     name: "nvidia",
     type: "openai",
     url: "https://integrate.api.nvidia.com/v1/chat/completions",
-    key: "", 
+    key: process.env.NVIDIA_API_KEY || "",
     model: "mistralai/mistral-small-4-119b-2603",
     enabled: true,
     max_chars: 8000,
@@ -47,7 +172,7 @@ let APIS: APIConfig[] = [
     name: "groq",
     type: "openai",
     url: "https://api.groq.com/openai/v1/chat/completions",
-    key: "",
+    key: process.env.GROQ_API_KEY || "",
     model: "llama3-70b-8192",
     enabled: true,
     max_chars: 4000,
@@ -67,14 +192,40 @@ let APIS: APIConfig[] = [
     id: "4",
     name: "ollama",
     type: "ollama",
-    url: "http://localhost:11434/v1/chat/completions",
-    key: "ollama", 
+    url: `${OLLAMA_BASE_URL}/v1/chat/completions`,
+    key: "",
     model: "llama3",
     enabled: false,
     max_chars: 2000,
     temperature: 0.5
   }
 ];
+
+// --- CONFIG PERSISTENCE ---
+async function loadConfig() {
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    const data = await fs.readFile(path.join(DATA_DIR, "config.json"), "utf-8");
+    const savedConfig = JSON.parse(data);
+    const currentApis = APIS;
+    APIS = savedConfig.map((api: any) => {
+      const previous = currentApis.find((a) => a.id === api.id || a.name === api.name);
+      return normalizeApiConfig(api, previous);
+    });
+    console.log(`⚙️ Configuração carregada: ${APIS.length} APIs.`);
+  } catch (err) {
+    console.log("📝 Usando configuração padrão (config.json não encontrado)");
+  }
+}
+
+async function saveConfigFile() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  const configToPersist = APIS.map(serializeApiConfig);
+  await fs.writeFile(path.join(DATA_DIR, "config.json"), JSON.stringify(configToPersist, null, 2));
+  console.log(`💾 Configuração salva em config.json${PERSIST_API_KEYS ? "" : " (sem API keys)"}`);
+}
+
+loadConfig();
 
 // --- SMART CACHE ---
 const smartCache: { embedding: number[], response: string, text: string }[] = [];
@@ -97,7 +248,8 @@ let MEMORY: MemoryEntry[] = [];
 
 async function loadMemory() {
   try {
-    const data = await fs.readFile(path.join(__dirname, "memory.json"), "utf-8");
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    const data = await fs.readFile(path.join(DATA_DIR, "memory.json"), "utf-8");
     MEMORY = JSON.parse(data);
     console.log(`🧠 Memória carregada: ${MEMORY.length} entradas.`);
   } catch (err) {
@@ -106,7 +258,8 @@ async function loadMemory() {
 }
 
 async function saveMemoryFile() {
-  await fs.writeFile(path.join(__dirname, "memory.json"), JSON.stringify(MEMORY, null, 2));
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  await fs.writeFile(path.join(DATA_DIR, "memory.json"), JSON.stringify(MEMORY, null, 2));
 }
 
 async function checkMemory(text: string) {
@@ -261,7 +414,8 @@ async function getEmbedding(text: string) {
   const ollamaApi = APIS.find(a => a.type === "ollama" && a.enabled);
   if (ollamaApi) {
     try {
-      const res = await axios.post("http://localhost:11434/api/embeddings", {
+      await ensureOllamaReady();
+      const res = await axios.post(`${OLLAMA_BASE_URL}/api/embeddings`, {
         model: "nomic-embed-text",
         prompt: text
       });
@@ -332,14 +486,19 @@ function limitMessages(messages: any[], maxChars: number) {
 
 async function callOpenAI(api: any, messages: any, stream = false) {
   const limitedMessages = limitMessages(messages, api.max_chars || 5000);
+  const authKey = normalizeApiKey(api.key);
+  if (api.type === "ollama") {
+    await ensureOllamaReady();
+  }
+  const requestUrl = api.url || `${OLLAMA_BASE_URL}/v1/chat/completions`;
   
-  const res = await axios.post(api.url, {
+  const res = await axios.post(requestUrl, {
     model: api.model,
     messages: limitedMessages,
     temperature: api.temperature || 0.7,
     stream: stream
   }, {
-    headers: api.key ? { Authorization: `Bearer ${api.key}` } : {},
+    headers: authKey ? { Authorization: `Bearer ${authKey}` } : {},
     responseType: stream ? 'stream' : 'json'
   });
 
@@ -351,11 +510,12 @@ async function callGemini(api: any, messages: any, stream = false) {
   const limitedMessages = limitMessages(messages, api.max_chars || 10000);
   const lastMessage = limitedMessages[limitedMessages.length - 1].content;
   const model = api.model || "gemini-1.5-flash";
+  const authKey = normalizeApiKey(api.key);
   
   const endpoint = stream ? "streamGenerateContent" : "generateContent";
   
   const res = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${api.key}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${authKey}`,
     {
       contents: [{ parts: [{ text: lastMessage }] }],
       generationConfig: {
@@ -371,7 +531,7 @@ async function callGemini(api: any, messages: any, stream = false) {
 
 // --- ROUTER ---
 
-async function tryAPI(api: any, messages: any, stream = false) {
+async function tryAPI(api: any, messages: any, stream = false, logContext = "") {
   try {
     if (api.type === "openai" || api.type === "ollama") {
       return await callOpenAI(api, messages, stream);
@@ -381,12 +541,18 @@ async function tryAPI(api: any, messages: any, stream = false) {
       return await callGemini(api, messages, stream);
     }
   } catch (err: any) {
-    console.log(`❌ ${api.name} falhou: ${err.message}`);
+    const parsed = getApiErrorDetails(err);
+    const prefix = logContext ? `[${logContext}] ` : "";
+    console.log(`❌ ${prefix}${api.name} falhou (${parsed.status || "unknown"}): ${parsed.detail}`);
     return null;
   }
 }
 
 // --- ENDPOINTS API ---
+
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
+});
 
 app.get("/api/stats", (req, res) => {
   res.json(STATS);
@@ -397,19 +563,85 @@ app.post("/api/config/test/:id", async (req, res) => {
   const api = APIS.find(a => a.id === id);
   if (!api) return res.status(404).json({ error: "API não encontrada" });
 
-  const start = Date.now();
-  const result = await tryAPI(api, [{ role: "user", content: "Ping" }]);
-  const latency = Date.now() - start;
+  try {
+    const start = Date.now();
+    let result: any = null;
 
-  if (result) {
+    if (api.type === "openai" || api.type === "ollama") {
+      result = await callOpenAI(api, [{ role: "user", content: "Ping" }]);
+    } else if (api.type === "gemini") {
+      result = await callGemini(api, [{ role: "user", content: "Ping" }]);
+    }
+
+    const latency = Date.now() - start;
+
+    if (!result) throw new Error("Resposta vazia da API");
     res.json({ success: true, latency, model: api.model });
-  } else {
-    res.status(500).json({ error: "Falha no teste" });
+  } catch (err: any) {
+    const parsed = getApiErrorDetails(err);
+    console.log(`❌ Teste ${api.name} falhou: ${parsed.status || "unknown"} - ${parsed.detail}`);
+    res.status(parsed.status || 500).json({
+      error: "Falha no teste",
+      detail: parsed.detail,
+      status: parsed.status,
+      provider: api.name
+    });
   }
 });
 
 app.get("/api/config", (req, res) => {
   res.json(APIS);
+});
+
+app.get("/api/config/models/:id", async (req, res) => {
+  const { id } = req.params;
+  const api = APIS.find(a => a.id === id);
+  if (!api) return res.status(404).json({ error: "API não encontrada" });
+
+  try {
+    if (api.type === "gemini") {
+      const authKey = normalizeApiKey(api.key);
+      const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${authKey}`;
+      const response = await axios.get(listUrl);
+      const models = (response.data.models || [])
+        .filter((m: any) => (m.supportedGenerationMethods || []).includes("generateContent"))
+        .map((m: any) => (m.name || "").replace(/^models\//, ""))
+        .filter(Boolean);
+
+      return res.json({ models: Array.from(new Set(models)).sort() });
+    }
+
+    if (api.type === "openai" || api.type === "ollama") {
+      if (!api.url) {
+        return res.status(400).json({ error: "API sem URL configurada" });
+      }
+
+      const parsedUrl = new URL(api.url);
+      parsedUrl.pathname = parsedUrl.pathname.replace(/\/chat\/completions\/?$/, "/models");
+      if (!/\/models$/.test(parsedUrl.pathname)) parsedUrl.pathname = "/v1/models";
+
+      const authKey = normalizeApiKey(api.key);
+      const response = await axios.get(parsedUrl.toString(), {
+        headers: authKey ? { Authorization: `Bearer ${authKey}` } : {}
+      });
+
+      const data = response.data?.data || response.data?.models || [];
+      const models = data
+        .map((m: any) => m.id || m.name)
+        .filter(Boolean);
+
+      return res.json({ models: Array.from(new Set(models)).sort() });
+    }
+
+    return res.status(400).json({ error: "Tipo de API não suportado para listagem" });
+  } catch (err: any) {
+    const parsed = getApiErrorDetails(err);
+    res.status(parsed.status || 500).json({
+      error: "Falha ao listar modelos",
+      detail: parsed.detail,
+      status: parsed.status
+    });
+  }
 });
 
 // --- MEMORY ENDPOINTS ---
@@ -465,7 +697,7 @@ app.delete("/api/memory/:id", async (req, res) => {
 
 app.get("/api/memory/download", async (req, res) => {
   try {
-    const filePath = path.join(__dirname, "memory.json");
+    const filePath = path.join(DATA_DIR, "memory.json");
     res.download(filePath, "masterclaw_memory.json");
   } catch (err) {
     res.status(500).json({ error: "Erro ao baixar arquivo de memória" });
@@ -526,7 +758,7 @@ app.post("/api/agent/execute", async (req, res) => {
   if (command.startsWith("EXEC:")) {
     const cmd = command.replace("EXEC:", "").trim();
     try {
-      const { stdout, stderr } = await execPromise(cmd, { cwd: currentDir });
+      const { stdout, stderr } = await runCommand(cmd, currentDir);
       return res.json({ text: `Executado: ${cmd}\n\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}` });
     } catch (err: any) {
       return res.json({ text: `Erro ao executar comando: ${err.message}` });
@@ -537,35 +769,47 @@ app.post("/api/agent/execute", async (req, res) => {
 });
 
 // Suporta tanto adicionar uma única API quanto atualizar a lista inteira (bulk)
-app.post("/api/config", (req, res) => {
+app.post("/api/config", async (req, res) => {
   if (Array.isArray(req.body)) {
-    APIS = req.body.map(api => ({
-      ...api,
-      id: api.id || Math.random().toString(36).substr(2, 9),
-      enabled: api.enabled !== undefined ? api.enabled : true
-    }));
+    APIS = req.body.map((api) => {
+      const existing = APIS.find((a) => a.id === api.id || a.name === api.name);
+      return normalizeApiConfig(
+        {
+          ...api,
+          id: api.id || Math.random().toString(36).substr(2, 9)
+        },
+        existing
+      );
+    });
     console.log("🔥 APIs atualizadas via bulk upload");
+    await saveConfigFile();
     return res.json({ success: true, count: APIS.length });
   }
 
-  const newApi = { 
-    ...req.body, 
+  const newApi = normalizeApiConfig({
+    ...req.body,
     id: Math.random().toString(36).substr(2, 9),
-    enabled: true 
-  };
+    enabled: true
+  });
   APIS.push(newApi);
+  await saveConfigFile();
   res.json(newApi);
 });
 
-app.put("/api/config/:id", (req, res) => {
+app.put("/api/config/:id", async (req, res) => {
   const { id } = req.params;
-  APIS = APIS.map(api => api.id === id ? { ...api, ...req.body } : api);
+  APIS = APIS.map((api) => {
+    if (api.id !== id) return api;
+    return normalizeApiConfig({ ...api, ...req.body }, api);
+  });
+  await saveConfigFile();
   res.json({ success: true });
 });
 
-app.delete("/api/config/:id", (req, res) => {
+app.delete("/api/config/:id", async (req, res) => {
   const { id } = req.params;
   APIS = APIS.filter(api => api.id !== id);
+  await saveConfigFile();
   res.json({ success: true });
 });
 
@@ -581,7 +825,7 @@ const DEPENDENCIES = [
 app.get("/api/deps", async (req, res) => {
   const results = await Promise.all(DEPENDENCIES.map(async (dep) => {
     try {
-      const { stdout } = await execPromise(dep.check);
+      const { stdout } = await runCommand(dep.check);
       return { ...dep, installed: true, version: stdout.trim() };
     } catch (err) {
       return { ...dep, installed: false, version: null };
@@ -599,7 +843,7 @@ app.post("/api/deps/install", async (req, res) => {
   if (!installCmd) return res.status(400).json({ error: `Instalação não disponível para ${os}` });
 
   try {
-    const { stdout, stderr } = await execPromise(installCmd);
+    const { stdout, stderr } = await runCommand(installCmd);
     res.json({ success: true, stdout, stderr });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -607,15 +851,31 @@ app.post("/api/deps/install", async (req, res) => {
 });
 
 // --- FILE SYSTEM API ---
+// Validação de path traversal: garante que o path esteja dentro do diretório do projeto
+
+const PROJECT_ROOT = process.cwd();
+
+function validatePath(requestedPath: string): string {
+  const resolvedPath = path.resolve(requestedPath);
+  const realPath = fsSync.realpathSync(resolvedPath).replace(/\\/g, '/');
+  const projectRoot = PROJECT_ROOT.replace(/\\/g, '/');
+
+  if (!realPath.startsWith(projectRoot)) {
+    throw new Error(`Path traversal detectado: acesso fora do diretório do projeto (${projectRoot})`);
+  }
+
+  return resolvedPath;
+}
 
 app.get("/api/fs/ls", async (req, res) => {
   const dirPath = (req.query.path as string) || process.cwd();
   try {
-    const files = await fs.readdir(dirPath, { withFileTypes: true });
+    const validatedPath = validatePath(dirPath);
+    const files = await fs.readdir(validatedPath, { withFileTypes: true });
     const result = files.map(f => ({
       name: f.name,
       isDirectory: f.isDirectory(),
-      path: path.join(dirPath, f.name)
+      path: path.join(validatedPath, f.name)
     }));
     res.json(result);
   } catch (err: any) {
@@ -627,7 +887,8 @@ app.get("/api/fs/read", async (req, res) => {
   const filePath = req.query.path as string;
   if (!filePath) return res.status(400).json({ error: "Path is required" });
   try {
-    const content = await fs.readFile(filePath, "utf-8");
+    const validatedPath = validatePath(filePath);
+    const content = await fs.readFile(validatedPath, "utf-8");
     res.json({ content });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -637,7 +898,8 @@ app.get("/api/fs/read", async (req, res) => {
 app.post("/api/fs/write", async (req, res) => {
   const { path: filePath, content } = req.body;
   try {
-    await fs.writeFile(filePath, content, "utf-8");
+    const validatedPath = validatePath(filePath);
+    await fs.writeFile(validatedPath, content, "utf-8");
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -646,7 +908,7 @@ app.post("/api/fs/write", async (req, res) => {
 
 // --- STREAMING HANDLER WITH INTELLIGENT FALLBACK ---
 
-async function streamWithFallback(apis: any[], messages: any[], res: any, onComplete: (fullText: string, model: string) => void) {
+async function streamWithFallback(apis: any[], messages: any[], res: any, onComplete: (fullText: string, model: string) => void, logContext = "") {
   let fullText = "";
   let usedModel = "";
 
@@ -662,7 +924,8 @@ async function streamWithFallback(apis: any[], messages: any[], res: any, onComp
       return tryNextStream(startIndex + 1, partialText);
     }
 
-    console.log(`🚀 Tentando stream inteligente com ${api.name} (index: ${startIndex})`);
+    const prefix = logContext ? `[${logContext}] ` : "";
+    console.log(`🚀 ${prefix}Tentando stream com ${api.name} (index: ${startIndex})`);
     
     // Se for um fallback no meio, ajustamos o prompt para continuar
     let currentMessages = [...messages];
@@ -673,10 +936,11 @@ async function streamWithFallback(apis: any[], messages: any[], res: any, onComp
     }
 
     try {
-      const result = await tryAPI(api, currentMessages, true);
+      const result = await tryAPI(api, currentMessages, true, logContext);
       if (!result) throw new Error("Falha ao iniciar stream");
 
       usedModel = api.model;
+      console.log(`✅ ${prefix}stream conectado via ${api.name} (${api.model})`);
       let stallTimer: any;
 
       const resetStallTimer = () => {
@@ -737,6 +1001,11 @@ async function streamWithFallback(apis: any[], messages: any[], res: any, onComp
         tryNextStream(startIndex + 1, fullText);
       });
 
+      result.on('close', () => {
+        clearTimeout(stallTimer);
+        stallTimer = null as any;
+      });
+
     } catch (err) {
       console.log(`❌ Falha ao conectar stream com ${api.name}`);
       return tryNextStream(startIndex + 1, partialText);
@@ -761,6 +1030,7 @@ app.post("/api/agent/chat", async (req, res) => {
   const { message, history, workingDir, stream } = req.body;
   const currentDir = workingDir || process.cwd();
   const start = Date.now();
+  const requestId = `agent-${Date.now().toString(36)}`;
 
   // Check Smart Cache
   const cached = await checkSmartCache(message);
@@ -793,13 +1063,11 @@ app.post("/api/agent/chat", async (req, res) => {
   }
 
   const context = await getFileContext(currentDir);
-  const intent = await classifyIntent(message);
-  const compressedHistory = await compressHistory(history);
+  const compressedHistory = STRICT_ROUTER ? history : await compressHistory(history);
 
   const systemPrompt = `Você é o Claude Code, um assistente de terminal focado em programação.
 Diretório atual: ${currentDir}
 Arquivos no diretório: ${context}
-Intenção detectada: ${intent}
 
 Regras:
 1. Se precisar ler um arquivo, responda APENAS: READ: nome_do_arquivo
@@ -815,31 +1083,14 @@ Sempre use a nossa configuração de APIs roteadas.`;
     ...compressedHistory,
     { role: "user", content: message }
   ];
-
-  // Re-order APIS based on intent
-  let sortedApis = [...APIS];
-  if (intent === "fast") {
-    // Prioritize fast models (Gemini Flash, Groq)
-    sortedApis.sort((a, b) => {
-      const aFast = a.name === "google" || a.name === "groq" ? 0 : 1;
-      const bFast = b.name === "google" || b.name === "groq" ? 0 : 1;
-      return aFast - bFast;
-    });
-  } else {
-    // Prioritize smart models (Mistral Large/Small, etc)
-    sortedApis.sort((a, b) => {
-      const aSmart = a.name === "nvidia" ? 0 : 1;
-      const bSmart = b.name === "nvidia" ? 0 : 1;
-      return aSmart - bSmart;
-    });
-  }
+  const orderedApis = [...APIS];
 
   if (stream) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    await streamWithFallback(sortedApis, messages, res, async (fullText, model) => {
+    await streamWithFallback(orderedApis, messages, res, async (fullText, model) => {
       const latency = Date.now() - start;
       updateStats(latency, false, model, message, fullText);
       
@@ -871,19 +1122,21 @@ Sempre use a nossa configuração de APIs roteadas.`;
       if (!fullText.startsWith("READ:") && !fullText.startsWith("WRITE:") && !fullText.startsWith("EXEC:")) {
         saveSmartCache(message, fullText);
       }
-    });
+    }, requestId);
     return;
   }
 
   let aiResponse = "";
   let usedModel = "";
 
-  for (const api of APIS) {
-    if (!api.enabled || !api.key) continue;
-    const result = await tryAPI(api, messages);
+  // Usa a ordem definida no painel (drag & drop) também no modo non-stream
+  for (const api of orderedApis) {
+    if (!api.enabled || (!api.key && api.name !== "ollama")) continue;
+    const result = await tryAPI(api, messages, false, requestId);
     if (result) {
       aiResponse = result;
       usedModel = api.model;
+      console.log(`✅ [${requestId}] resposta final via ${api.name} (${api.model})`);
       break;
     }
   }
@@ -948,7 +1201,7 @@ Sempre use a nossa configuração de APIs roteadas.`;
         try {
           console.log(`🛠️ Self-healing: Validando ${fileName}...`);
           // Tenta rodar o lint do projeto ou tsc
-          await execPromise("npx tsc --noEmit", { cwd: currentDir });
+          await runCommand("npx tsc --noEmit", currentDir);
           return res.json({ text: `Arquivo ${fileName} escrito e validado com sucesso! (Self-healing OK)`, model: usedModel });
         } catch (lintErr: any) {
           console.log(`⚠️ Self-healing detectou erro em ${fileName}`);
@@ -969,7 +1222,7 @@ Sempre use a nossa configuração de APIs roteadas.`;
   if (aiResponse.startsWith("EXEC:")) {
     const command = aiResponse.replace("EXEC:", "").trim();
     try {
-      const { stdout, stderr } = await execPromise(command, { cwd: currentDir });
+      const { stdout, stderr } = await runCommand(command, currentDir);
       return res.json({ text: `Executado: ${command}\n\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`, model: usedModel });
     } catch (err: any) {
       return res.json({ text: `Erro ao executar comando: ${err.message}`, model: usedModel });
@@ -985,6 +1238,7 @@ app.post("/v1/messages", async (req, res) => {
   const messages = req.body.messages;
   const stream = req.body.stream === true;
   const start = Date.now();
+  const requestId = `v1-${Date.now().toString(36)}`;
   
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: "Messages array is required" });
@@ -1050,7 +1304,7 @@ app.post("/v1/messages", async (req, res) => {
       const latency = Date.now() - start;
       updateStats(latency, false, model, lastMessage, fullText);
       saveSmartCache(lastMessage, fullText);
-    });
+    }, requestId);
     return;
   }
 
@@ -1058,9 +1312,10 @@ app.post("/v1/messages", async (req, res) => {
     if (!api.enabled) continue;
     if (!api.key && api.name !== 'ollama') continue;
 
-    const result = await tryAPI(api, messages, false);
+    const result = await tryAPI(api, messages, false, requestId);
 
     if (result) {
+      console.log(`✅ [${requestId}] resposta final via ${api.name} (${api.model})`);
       const latency = Date.now() - start;
       updateStats(latency, false, api.model, lastMessage, result);
       await saveSmartCache(lastMessage, result);
@@ -1082,7 +1337,7 @@ app.post("/v1/messages", async (req, res) => {
 // --- VITE MIDDLEWARE ---
 
 async function startServer() {
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3100;
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -1098,8 +1353,11 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`🔥 Proxy inteligente rodando na porta ${PORT}`);
+    console.log(`📍 Host: 0.0.0.0:${PORT} (IPv4)`);
+  }).on('error', (err) => {
+    console.error(`❌ Erro ao iniciar servidor: ${err.message}`);
   });
 }
 
