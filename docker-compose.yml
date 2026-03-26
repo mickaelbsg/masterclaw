@@ -24,7 +24,16 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+    networks:
+      - masterclaw_network
 
 volumes:
   masterclaw_data:
     driver: local
+
+networks:
+  masterclaw_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.250.0.0/24
